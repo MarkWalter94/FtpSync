@@ -1,0 +1,12 @@
+﻿{
+  "profiles": {
+    "FtpSync": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "commandLineArgs": "",
+      "environmentVariables": {
+        "DOTNET_ENVIRONMENT": "Development"
+      }
+    }
+  }
+}

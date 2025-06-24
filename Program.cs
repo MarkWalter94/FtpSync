@@ -40,11 +40,13 @@ if (args.Any())
         IsRequired = true
     };
     
+    
     var rootCommand = new RootCommand
     {
         serverOption,
         userOption,
         passwordOption
+        
     };
     
     rootCommand.SetHandler((server, user, password) =>
@@ -73,6 +75,7 @@ IHost host = Host.CreateDefaultBuilder(args).UseWindowsService()
     {
         services.AddHostedService<Worker>();
         services.AddScoped<IDbUtils, DbUtils>();
+        services.AddScoped<IEncriptionUtils, EncriptionUtils>();
         if(ftpSettings != null)
         {
             services.AddSingleton<FtpSettings>(ftpSettings);

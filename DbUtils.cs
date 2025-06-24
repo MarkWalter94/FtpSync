@@ -17,15 +17,17 @@ namespace FtpSync
     public class DbUtils : IDbUtils
     {
         private readonly IConfiguration _configuration;
+        private readonly IEncriptionUtils _encriptionUtils;
         private readonly string _dbPath;
         private const string FTPPASS = "pV0FtyJY6UE";
         private const string FTPUSER = "uQ6JPMRFy8B";
         private const string FTPURL = "hfBdrcrbfdH";
 
-        public DbUtils(IConfiguration configuration)
+        public DbUtils(IConfiguration configuration, IEncriptionUtils encriptionUtils)
         {
+            _encriptionUtils = encriptionUtils;
             _configuration = configuration;
-            _dbPath = _configuration["Database:Path"];
+            _dbPath = _configuration["Database:Path"]!;
         }
 
         private SqliteConnection GetConnection()
@@ -55,7 +57,7 @@ namespace FtpSync
             var encUrl = await GetFtpSetting(FTPURL);
             if (string.IsNullOrEmpty(encUrl))
                 return null;
-            return DPAPIUtils.Decrypt(encUrl);
+            return _encriptionUtils.Decrypt(encUrl);
         }
 
         public async Task<string?> GetFtpUser()
@@ -63,7 +65,7 @@ namespace FtpSync
             var encUser = await GetFtpSetting(FTPUSER);
             if (string.IsNullOrEmpty(encUser))
                 return null;
-            return DPAPIUtils.Decrypt(encUser);
+            return _encriptionUtils.Decrypt(encUser);
         }
 
         public async Task<string?> GetFtpPassword()
@@ -71,7 +73,7 @@ namespace FtpSync
             var encPwd = await GetFtpSetting(FTPPASS);
             if (string.IsNullOrEmpty(encPwd))
                 return null;
-            return DPAPIUtils.Decrypt(encPwd);
+            return _encriptionUtils.Decrypt(encPwd);
         }
 
         public async Task SetFtpSettings(string entropy, string url, string user, string pass)
@@ -91,19 +93,19 @@ namespace FtpSync
             comm.Parameters.Clear();
             comm.CommandText = "INSERT INTO settings (setname, setvalue) VALUES (@name,@value)";
             comm.Parameters.AddWithValue("name", FTPUSER);
-            comm.Parameters.AddWithValue("value", DPAPIUtils.Encrypt(user, entropy));
+            comm.Parameters.AddWithValue("value", _encriptionUtils.Encrypt(user));
             await comm.ExecuteNonQueryAsync();
 
             comm.Parameters.Clear();
             comm.CommandText = "INSERT INTO settings (setname, setvalue) VALUES (@name,@value)";
             comm.Parameters.AddWithValue("name", FTPPASS);
-            comm.Parameters.AddWithValue("value", DPAPIUtils.Encrypt(pass, entropy));
+            comm.Parameters.AddWithValue("value", _encriptionUtils.Encrypt(pass));
             await comm.ExecuteNonQueryAsync();
 
             comm.Parameters.Clear();
             comm.CommandText = "INSERT INTO settings (setname, setvalue) VALUES (@name,@value)";
             comm.Parameters.AddWithValue("name", FTPURL);
-            comm.Parameters.AddWithValue("value", DPAPIUtils.Encrypt(url, entropy));
+            comm.Parameters.AddWithValue("value", _encriptionUtils.Encrypt(url));
             await comm.ExecuteNonQueryAsync();
         }
 

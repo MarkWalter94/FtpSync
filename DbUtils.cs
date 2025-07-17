@@ -12,7 +12,7 @@ namespace FtpSync
         public Task InitDb();
         Task MarkFileAsSynhronized(int syncId, string filename, long fileSize, DateTime lastModDate, bool success, string? errors);
         Task SetFtpSettings(string entropy, string? url, string? user, string? pass);
-        
+
         /// <summary>
         /// Returns the sync ID for the given folder name and target folder name.
         /// If the sync does not exist, it will create a new entry and return the new ID.
@@ -142,7 +142,7 @@ namespace FtpSync
             comm.Parameters.AddWithValue("foldername", folderName);
             comm.Parameters.AddWithValue("targetfoldername", targetFolderName);
 
-            var res =await comm.ExecuteScalarAsync();
+            var res = await comm.ExecuteScalarAsync();
             if (res == null)
             {
                 //Non esiste ancora la sync, la creo.

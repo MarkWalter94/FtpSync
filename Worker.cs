@@ -127,7 +127,7 @@ namespace FtpSync
 
                                     return client.UploadFile(fullPathFile, Path.Combine(folderFilesToUpload.TargetFolderFtp, Path.GetRelativePath(folderFilesToUpload.FilesToUploadFolder, fullPathFile)), FtpRemoteExists.Overwrite, true, progress: Progress);
                                 }, stoppingToken);
-                                _logger.LogDebug("File synched!");
+                                _logger.LogInformation($"File {file} synched!", file);
                                 await dbUtils.MarkFileAsSynhronized(syncId, Path.GetRelativePath(folderFilesToUpload.FilesToUploadFolder, fullPathFile), fileSize, lastModDate, true, null);
                                 if (deleteAfterTransfer)
                                 {

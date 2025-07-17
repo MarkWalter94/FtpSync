@@ -9,6 +9,11 @@ namespace FtpSync
         private readonly IHostApplicationLifetime _applicationLifetime;
         private readonly IServiceScopeFactory _serviceScopeFactory;
 
+        private bool _showProgress = false;
+        private long _fileDimensions = 0;
+
+        const long FILE_SIZE_FOR_PROGRESS = 1024 * 1024;
+
         public Worker(ILogger<Worker> logger, IConfiguration configuration, IHostApplicationLifetime applicationLifetime, IServiceScopeFactory serviceScopeFactory)
         {
             _logger = logger;
@@ -23,10 +28,9 @@ namespace FtpSync
             var dbUtilsInit = initScope.ServiceProvider.GetRequiredService<IDbUtils>();
             await dbUtilsInit.InitDb();
 
-
-            var server = string.Empty;
-            var user = string.Empty;
-            var pwd = string.Empty;
+            string server;
+            string user;
+            string pwd;
 
             var ftpSettings = initScope.ServiceProvider.GetService<FtpSettings>();
             if (ftpSettings != null)
@@ -48,17 +52,20 @@ namespace FtpSync
                 pwd = await dbUtilsInit.GetFtpPassword();
             }
 
+            if (string.IsNullOrWhiteSpace(server) || string.IsNullOrWhiteSpace(user))
+            {
+                _logger.LogError("Server or user settings not configured! stopping!");
+                KillMe();
+            }
 
-            initScope.Dispose();
-            var folderFilesToUpload = _configuration["Files:FilesToUploadFolder"];
-            var targetFtp = _configuration["Files:TargetFolderFtp"];
+            var foldersFilesToUpload = _configuration.GetSection("Files").Get<List<SyncFolders>>();
             var maxRetries = _configuration.GetValue<int>("Settings:MaxRetries");
             var deleteAfterTransfer = _configuration.GetValue<bool>("Settings:DeleteAfterTransfer");
             var loopSeconds = _configuration.GetValue<int>("Settings:LoopSeconds");
 
-            if (!Directory.Exists(folderFilesToUpload))
+            if (foldersFilesToUpload == null || !foldersFilesToUpload.Any())
             {
-                _logger.LogError($"Dir {folderFilesToUpload} does not exists, stopping!");
+                _logger.LogError($"Indicate at least one folder to sync, stopping!");
                 KillMe();
             }
 
@@ -70,59 +77,74 @@ namespace FtpSync
                     var dbUtils = scope.ServiceProvider.GetRequiredService<IDbUtils>();
                     //_logger.LogInformation("Worker running at: {time}", DateTimeOffset.Now);
                     using var client = new FtpClient(server, user, pwd);
-
-                    foreach (var file in Directory.EnumerateFiles(folderFilesToUpload, "*.*", SearchOption.AllDirectories))
+                    foreach (var folderFilesToUpload in foldersFilesToUpload)
                     {
-                        var fi = new FileInfo(file);
-                        var fileSize = fi.Length;
-                        var lastModDate = fi.LastWriteTimeUtc;
-                        
-                        var fullPathFile = Path.GetFullPath(file);
-                        var fileStat = await dbUtils.GetFileSyncStatus(Path.GetFullPath(fullPathFile), fileSize, lastModDate);
-                        if (fileStat == -1)
-                        {
-                            //Già sincronizzato.
-                            _logger.LogDebug($"File {file} already synched, skipping..");
-                            continue;
-                        }
-                        else if (fileStat == -2 || fileStat == -3)
-                        {
-                            _logger.LogDebug($"File {file} modified, replacing..");
-                        }
-                        else if (fileStat > maxRetries)
-                        {
-                            _logger.LogDebug($"File {file} max retries reached, skipping..");
-                            continue; //Troppi tentativi.
-                        }
+                        if (stoppingToken.IsCancellationRequested)
+                            break;
 
-                        _logger.LogDebug($"Sync of file {file}...");
+                        var syncId = await dbUtils.GetSyncId(folderFilesToUpload.FilesToUploadFolder, folderFilesToUpload.TargetFolderFtp);
 
-                        //Carico il file..
-                        try
+                        foreach (var file in Directory.EnumerateFiles(folderFilesToUpload.FilesToUploadFolder, "*.*", SearchOption.AllDirectories))
                         {
-                            if (!client.IsConnected)
-                                client.AutoConnect();
+                            if (stoppingToken.IsCancellationRequested)
+                                break;
+                            var fi = new FileInfo(file);
+                            var fileSize = fi.Length;
+                            var lastModDate = fi.LastWriteTimeUtc;
 
-                            var result = await Task.Run(() => client.UploadFile(fullPathFile, Path.Combine(targetFtp, Path.GetRelativePath(folderFilesToUpload, fullPathFile)), FtpRemoteExists.Overwrite, true));
-                            _logger.LogDebug("File synched!");
-                            await dbUtils.MarkFileAsSynhronized(fullPathFile, fileSize, lastModDate, true, null);
-                            if (deleteAfterTransfer)
+                            var fullPathFile = Path.GetFullPath(file);
+                            var fileStat = await dbUtils.GetFileSyncStatus(syncId, Path.GetRelativePath(folderFilesToUpload.FilesToUploadFolder, fullPathFile), fileSize, lastModDate);
+                            
+                            if (fileStat.DifferentFileSize || fileStat.DifferentLastModDate)
                             {
-                                try
+                                _logger.LogDebug($"File {file} modified, replacing..");
+                            }
+                            else if (fileStat.Retries > maxRetries)
+                            {
+                                _logger.LogDebug($"File {file} max retries reached, skipping..");
+                                continue; //Troppi tentativi.
+                            }else if (fileStat.Processed)
+                            {
+                                //Già sincronizzato.
+                                _logger.LogDebug($"File {file} already synched, skipping..");
+                                continue;
+                            }
+
+                            _logger.LogDebug($"Sync of file {file}...");
+
+                            //Carico il file..
+                            try
+                            {
+                                if (!client.IsConnected)
+                                    client.AutoConnect();
+
+                                var result = await Task.Run(() =>
                                 {
-                                    File.Delete(fullPathFile);
-                                }
-                                catch (Exception fsex)
+                                    _fileDimensions = fi.Length;
+                                    _showProgress = _fileDimensions >= FILE_SIZE_FOR_PROGRESS;
+
+                                    return client.UploadFile(fullPathFile, Path.Combine(folderFilesToUpload.TargetFolderFtp, Path.GetRelativePath(folderFilesToUpload.FilesToUploadFolder, fullPathFile)), FtpRemoteExists.Overwrite, true, progress: Progress);
+                                });
+                                _logger.LogDebug("File synched!");
+                                await dbUtils.MarkFileAsSynhronized(syncId, Path.GetRelativePath(folderFilesToUpload.FilesToUploadFolder, fullPathFile), fileSize, lastModDate, true, null);
+                                if (deleteAfterTransfer)
                                 {
-                                    _logger.LogError(fsex, $"Error during delete of {fullPathFile}");
+                                    try
+                                    {
+                                        File.Delete(fullPathFile);
+                                    }
+                                    catch (Exception fsex)
+                                    {
+                                        _logger.LogError(fsex, $"Error during delete of {fullPathFile}");
+                                    }
                                 }
                             }
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogError(ex, $"Error during sync of {fullPathFile}");
-                            var errstr = $"Error during sync of {fullPathFile}, detail:{Environment.NewLine}{ex}";
-                            await dbUtils.MarkFileAsSynhronized(fullPathFile, fileSize, lastModDate, false, errstr);
+                            catch (Exception ex)
+                            {
+                                _logger.LogError(ex, $"Error during sync of {fullPathFile}");
+                                var errstr = $"Error during sync of {fullPathFile}, detail:{Environment.NewLine}{ex}";
+                                await dbUtils.MarkFileAsSynhronized(syncId, Path.GetRelativePath(folderFilesToUpload.FilesToUploadFolder, fullPathFile), fileSize, lastModDate, false, errstr);
+                            }
                         }
                     }
                 }
@@ -133,6 +155,26 @@ namespace FtpSync
 
                 _logger.LogDebug("All done, going to sleep..");
                 await Task.Delay(loopSeconds * 1000, stoppingToken);
+            }
+        }
+
+        private void Progress(FtpProgress obj)
+        {
+            if (!_showProgress)
+                return;
+            int barLength = 50;
+            double percent = obj.Progress;
+            int filledLength = (int)(barLength * percent / 100.0);
+
+            string bar = new string('█', filledLength) + new string('░', barLength - filledLength);
+            var totalMB = _fileDimensions / (1024.0 * 1024.0);
+            double transferredMB = obj.TransferredBytes / (1024.0 * 1024.0);
+
+            Console.Write($"\r[{bar}] {percent,6:0.0}%  {transferredMB:0.00}/{totalMB:0.00} MB  {obj.TransferSpeedToString()} MB/s");
+
+            if (percent >= 100.0)
+            {
+                Console.WriteLine(); // Vai a capo al completamento
             }
         }
 

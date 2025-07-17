@@ -3,19 +3,6 @@ using System.Security.Cryptography;
 using System.Text;
 using FtpSync;
 
-
-
-// "Ftp": {
-//     "Entropy": "12345678564325vY*GPEF#Bbyi9qaefqreKIY",
-//     "Server": "",
-//     "User": "",
-//     "Password": ""
-// },
-
-//Read from command line arguments entropy, server, user, password
-
-
-
 var argsPassed = true;
 FtpSettings? ftpSettings = null;
 if (args.Any())
@@ -40,20 +27,18 @@ if (args.Any())
         IsRequired = true
     };
     
-    
     var rootCommand = new RootCommand
     {
         serverOption,
         userOption,
         passwordOption
-        
     };
-    
+
     rootCommand.SetHandler((server, user, password) =>
     {
         ftpSettings = new FtpSettings
         {
-            Entropy = GenerateStrongRandomString(37), 
+            Entropy = GenerateStrongRandomString(37),
             Server = server,
             User = user,
             Password = password
@@ -67,19 +52,21 @@ if (args.Any())
         return res;
 }
 
-while(!argsPassed)
+while (!argsPassed)
     await Task.Delay(100);
 
 IHost host = Host.CreateDefaultBuilder(args).UseWindowsService()
+    .ConfigureLogging(logging => logging.SetMinimumLevel(LogLevel.Trace).AddConsole())
     .ConfigureServices(services =>
     {
         services.AddHostedService<Worker>();
         services.AddScoped<IDbUtils, DbUtils>();
         services.AddScoped<IEncriptionUtils, EncriptionUtils>();
-        if(ftpSettings != null)
+        if (ftpSettings != null)
         {
             services.AddSingleton<FtpSettings>(ftpSettings);
         }
+
         services.AddWindowsService();
     })
     .Build();

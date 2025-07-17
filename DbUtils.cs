@@ -5,13 +5,22 @@ namespace FtpSync
 {
     public interface IDbUtils
     {
-        Task<int> GetFileSyncStatus(string filename, long fileSize, DateTime lastModDate);
+        Task<DbUtils.FileSyncStatus> GetFileSyncStatus(int syncId, string filename, long fileSize, DateTime lastModDate);
         Task<string?> GetFtpPassword();
         Task<string?> GetFtpUrl();
         Task<string?> GetFtpUser();
         public Task InitDb();
-        Task MarkFileAsSynhronized(string filename, long fileSize, DateTime lastModDate, bool success, string? errors);
+        Task MarkFileAsSynhronized(int syncId, string filename, long fileSize, DateTime lastModDate, bool success, string? errors);
         Task SetFtpSettings(string entropy, string url, string user, string pass);
+        
+        /// <summary>
+        /// Returns the sync ID for the given folder name and target folder name.
+        /// If the sync does not exist, it will create a new entry and return the new ID.
+        /// </summary>
+        /// <param name="folderName"></param>
+        /// <param name="targetFolderName"></param>
+        /// <returns></returns>
+        Task<int> GetSyncId(string folderName, string targetFolderName);
     }
 
     public class DbUtils : IDbUtils
@@ -45,10 +54,23 @@ namespace FtpSync
 
             using var comm = conn.CreateCommand();
             comm.CommandType = System.Data.CommandType.Text;
-            comm.CommandText = "CREATE TABLE processedfiles (filename TEXT NOT NULL, date TEXT NOT NULL, processed INTEGER NOT NULL, errors TEXT NULL, retries INTEGER NOT NULL, filesize INTEGER NOT NULL, lastmoddate TEXT NOT NULL, PRIMARY KEY (filename));";
+            comm.CommandText = "CREATE TABLE processedfiles (" +
+                               "    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT," +
+                               "    filename TEXT NOT NULL," +
+                               "    date TEXT NOT NULL," +
+                               "    processed INTEGER NOT NULL," +
+                               "    errors TEXT NULL," +
+                               "    retries INTEGER NOT NULL," +
+                               "    filesize INTEGER NOT NULL," +
+                               "    lastmoddate TEXT NOT NULL," +
+                               "    syncid INTEGER," +
+                               "    FOREIGN KEY(syncid) REFERENCES syncs(id));";
             await comm.ExecuteNonQueryAsync();
 
             comm.CommandText = "CREATE TABLE settings (setname TEXT NOT NULL, setvalue TEXT NOT NULL, PRIMARY KEY (setname));";
+            await comm.ExecuteNonQueryAsync();
+
+            comm.CommandText = "CREATE TABLE syncs (id INTEGER PRIMARY KEY AUTOINCREMENT, foldername TEXT NOT NULL, targetfoldername TEXT NOT NULL, date TEXT NOT NULL);";
             await comm.ExecuteNonQueryAsync();
         }
 
@@ -109,6 +131,31 @@ namespace FtpSync
             await comm.ExecuteNonQueryAsync();
         }
 
+        public async Task<int> GetSyncId(string folderName, string targetFolderName)
+        {
+            await using var conn = GetConnection();
+            await conn.OpenAsync();
+
+            await using var comm = conn.CreateCommand();
+            comm.CommandType = System.Data.CommandType.Text;
+            comm.CommandText = "SELECT id FROM syncs WHERE foldername = @foldername AND targetfoldername = @targetfoldername";
+            comm.Parameters.AddWithValue("foldername", folderName);
+            comm.Parameters.AddWithValue("targetfoldername", targetFolderName);
+
+            var res =await comm.ExecuteScalarAsync();
+            if (res == null)
+            {
+                //Non esiste ancora la sync, la creo.
+                comm.CommandText = "INSERT INTO syncs (foldername, targetfoldername, date) VALUES (@foldername, @targetfoldername, @date); SELECT last_insert_rowid();";
+                comm.Parameters.AddWithValue("date", DateTime.Now.ToString("o"));
+                res = await comm.ExecuteScalarAsync();
+                if (res == null)
+                    throw new Exception("Unable to create sync entry in database.");
+            }
+
+            return Convert.ToInt32(res);
+        }
+
         private async Task<string?> GetFtpSetting(string setting)
         {
             using var conn = GetConnection();
@@ -132,39 +179,48 @@ namespace FtpSync
         /// </summary>
         /// <param name="filename"></param>
         /// <returns></returns>
-        public async Task<int> GetFileSyncStatus(string filename, long fileSize, DateTime lastModDate)
+        public async Task<FileSyncStatus> GetFileSyncStatus(int syncId, string filename, long fileSize, DateTime lastModDate)
         {
             using var conn = GetConnection();
             await conn.OpenAsync();
 
             using var comm = conn.CreateCommand();
             comm.CommandType = System.Data.CommandType.Text;
-            comm.CommandText = "SELECT * FROM processedfiles WHERE filename = @filename";
+            comm.CommandText = "SELECT * FROM processedfiles WHERE syncid = @syncid AND filename = @filename";
             comm.Parameters.AddWithValue("filename", filename);
+            comm.Parameters.AddWithValue("syncid", syncId);
             using var reader = await comm.ExecuteReaderAsync();
 
             if (!await reader.ReadAsync())
             {
-                return 0;
+                return new FileSyncStatus();
             }
 
             var alreadySynch = reader.GetInt32("processed");
             var fileSizeDb = reader.GetInt64("filesize");
             var lastModDateDb = reader.GetString("lastmoddate");
             var lastModDateDbParsed = DateTime.Parse(lastModDateDb);
-            if (fileSizeDb != fileSize)
-            {
-                return -2;
-            }
-            else if (lastModDate != lastModDateDbParsed.ToUniversalTime())
-            {
-                return -3;
-            }
 
-            if (alreadySynch == 1)
-                return -1;
+            return new FileSyncStatus
+            {
+                FileExists = true,
+                Processed = alreadySynch == 1,
+                ProcessedFileId = reader.GetInt32("id"),
+                DifferentFileSize = fileSize != fileSizeDb,
+                DifferentLastModDate = lastModDate != lastModDateDbParsed.ToUniversalTime(),
+                Retries = reader.GetInt32("retries")
+            };
+        }
 
-            return reader.GetInt32("retries");
+        public class FileSyncStatus
+        {
+            public bool FileExists { get; set; }
+
+            public bool Processed { get; set; } = false;
+            public int ProcessedFileId { get; set; } = 0;
+            public bool DifferentFileSize { get; set; } = false;
+            public bool DifferentLastModDate { get; set; } = false;
+            public int Retries { get; set; } = 0;
         }
 
 
@@ -173,22 +229,23 @@ namespace FtpSync
         /// </summary>
         /// <param name="filename"></param>
         /// <returns></returns>
-        public async Task MarkFileAsSynhronized(string filename, long fileSize, DateTime lastModDate, bool success, string? errors)
+        public async Task MarkFileAsSynhronized(int syncId, string filename, long fileSize, DateTime lastModDate, bool success, string? errors)
         {
-            var stat = await GetFileSyncStatus(filename, fileSize, lastModDate);
+            var stat = await GetFileSyncStatus(syncId, filename, fileSize, lastModDate);
             using var conn = GetConnection();
             await conn.OpenAsync();
             using var comm = conn.CreateCommand();
             comm.CommandType = CommandType.Text;
-            if (stat == 0)
+            if (!stat.FileExists)
             {
                 //insert
-                comm.CommandText = "INSERT INTO processedfiles (filename, date, processed, errors, retries, filesize, lastmoddate) VALUES (@filename, @date, @processed, @errors, @retries, @filesize, @lastmoddate)";
+                comm.CommandText = "INSERT INTO processedfiles (filename, date, processed, errors, retries, filesize, lastmoddate, syncid) VALUES (@filename, @date, @processed, @errors, @retries, @filesize, @lastmoddate, @syncid)";
                 comm.Parameters.AddWithValue("filename", filename);
                 comm.Parameters.AddWithValue("date", DateTime.Now.ToString("o"));
                 comm.Parameters.AddWithValue("processed", success ? 1 : 0);
                 comm.Parameters.AddWithValue("filesize", fileSize);
                 comm.Parameters.AddWithValue("lastmoddate", lastModDate.ToString("o"));
+                comm.Parameters.AddWithValue("syncid", syncId);
                 if (errors == null)
                     comm.Parameters.AddWithValue("errors", DBNull.Value);
                 else
@@ -204,15 +261,7 @@ namespace FtpSync
                 comm.Parameters.AddWithValue("errors", DBNull.Value);
                 comm.Parameters.AddWithValue("filesize", fileSize);
                 comm.Parameters.AddWithValue("lastmoddate", lastModDate.ToString("o"));
-                if (stat > 0)
-                {
-                    comm.Parameters.AddWithValue("retries", stat + 1);
-                }
-                else
-                {
-                    comm.Parameters.AddWithValue("retries", 1);
-                }
-                
+                comm.Parameters.AddWithValue("retries", stat.Retries + 1);
             }
 
             await comm.ExecuteNonQueryAsync();

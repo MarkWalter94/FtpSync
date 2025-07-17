@@ -64,16 +64,13 @@ IHost host = Host.CreateDefaultBuilder(args).UseWindowsService()
         services.AddScoped<IEncriptionUtils, EncriptionUtils>();
         if (ftpSettings != null)
         {
-            services.AddSingleton<FtpSettings>(ftpSettings);
+            services.AddSingleton(ftpSettings);
         }
 
         services.AddWindowsService();
     })
     .Build();
 
-await using var initialScope = host.Services.CreateAsyncScope();
-var configuration = initialScope.ServiceProvider.GetRequiredService<IConfiguration>();
-var dbPath = configuration.GetValue<string>("Database:Path");
 
 await host.RunAsync();
 

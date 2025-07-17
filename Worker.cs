@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using FluentFTP;
 
 namespace FtpSync
@@ -9,8 +10,8 @@ namespace FtpSync
         private readonly IHostApplicationLifetime _applicationLifetime;
         private readonly IServiceScopeFactory _serviceScopeFactory;
 
-        private bool _showProgress = false;
-        private long _fileDimensions = 0;
+        private bool _showProgress;
+        private long _fileDimensions;
 
         const long FILE_SIZE_FOR_PROGRESS = 1024 * 1024;
 
@@ -28,9 +29,9 @@ namespace FtpSync
             var dbUtilsInit = initScope.ServiceProvider.GetRequiredService<IDbUtils>();
             await dbUtilsInit.InitDb();
 
-            string server;
-            string user;
-            string pwd;
+            string? server;
+            string? user;
+            string? pwd;
 
             var ftpSettings = initScope.ServiceProvider.GetService<FtpSettings>();
             if (ftpSettings != null)
@@ -77,6 +78,7 @@ namespace FtpSync
                     var dbUtils = scope.ServiceProvider.GetRequiredService<IDbUtils>();
                     //_logger.LogInformation("Worker running at: {time}", DateTimeOffset.Now);
                     using var client = new FtpClient(server, user, pwd);
+                    Debug.Assert(foldersFilesToUpload != null, nameof(foldersFilesToUpload) + " != null");
                     foreach (var folderFilesToUpload in foldersFilesToUpload)
                     {
                         if (stoppingToken.IsCancellationRequested)
@@ -118,13 +120,13 @@ namespace FtpSync
                                 if (!client.IsConnected)
                                     client.AutoConnect();
 
-                                var result = await Task.Run(() =>
+                                await Task.Run(() =>
                                 {
                                     _fileDimensions = fi.Length;
                                     _showProgress = _fileDimensions >= FILE_SIZE_FOR_PROGRESS;
 
                                     return client.UploadFile(fullPathFile, Path.Combine(folderFilesToUpload.TargetFolderFtp, Path.GetRelativePath(folderFilesToUpload.FilesToUploadFolder, fullPathFile)), FtpRemoteExists.Overwrite, true, progress: Progress);
-                                });
+                                }, stoppingToken);
                                 _logger.LogDebug("File synched!");
                                 await dbUtils.MarkFileAsSynhronized(syncId, Path.GetRelativePath(folderFilesToUpload.FilesToUploadFolder, fullPathFile), fileSize, lastModDate, true, null);
                                 if (deleteAfterTransfer)

@@ -11,7 +11,7 @@ namespace FtpSync
         Task<string?> GetFtpUser();
         public Task InitDb();
         Task MarkFileAsSynhronized(int syncId, string filename, long fileSize, DateTime lastModDate, bool success, string? errors);
-        Task SetFtpSettings(string entropy, string url, string user, string pass);
+        Task SetFtpSettings(string entropy, string? url, string? user, string? pass);
         
         /// <summary>
         /// Returns the sync ID for the given folder name and target folder name.
@@ -49,11 +49,11 @@ namespace FtpSync
             if (File.Exists(_dbPath))
                 return;
 
-            using var conn = GetConnection();
+            await using var conn = GetConnection();
             await conn.OpenAsync();
 
-            using var comm = conn.CreateCommand();
-            comm.CommandType = System.Data.CommandType.Text;
+            await using var comm = conn.CreateCommand();
+            comm.CommandType = CommandType.Text;
             comm.CommandText = "CREATE TABLE processedfiles (" +
                                "    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT," +
                                "    filename TEXT NOT NULL," +
@@ -98,13 +98,13 @@ namespace FtpSync
             return _encriptionUtils.Decrypt(encPwd);
         }
 
-        public async Task SetFtpSettings(string entropy, string url, string user, string pass)
+        public async Task SetFtpSettings(string entropy, string? url, string? user, string? pass)
         {
-            using var conn = GetConnection();
+            await using var conn = GetConnection();
             await conn.OpenAsync();
 
-            using var comm = conn.CreateCommand();
-            comm.CommandType = System.Data.CommandType.Text;
+            await using var comm = conn.CreateCommand();
+            comm.CommandType = CommandType.Text;
 
             comm.CommandText = "DELETE FROM settings WHERE setname in (@s1,@s2,@s3)";
             comm.Parameters.AddWithValue("s1", FTPPASS);
@@ -137,7 +137,7 @@ namespace FtpSync
             await conn.OpenAsync();
 
             await using var comm = conn.CreateCommand();
-            comm.CommandType = System.Data.CommandType.Text;
+            comm.CommandType = CommandType.Text;
             comm.CommandText = "SELECT id FROM syncs WHERE foldername = @foldername AND targetfoldername = @targetfoldername";
             comm.Parameters.AddWithValue("foldername", folderName);
             comm.Parameters.AddWithValue("targetfoldername", targetFolderName);
@@ -158,14 +158,14 @@ namespace FtpSync
 
         private async Task<string?> GetFtpSetting(string setting)
         {
-            using var conn = GetConnection();
+            await using var conn = GetConnection();
             await conn.OpenAsync();
 
-            using var comm = conn.CreateCommand();
-            comm.CommandType = System.Data.CommandType.Text;
+            await using var comm = conn.CreateCommand();
+            comm.CommandType = CommandType.Text;
             comm.CommandText = "SELECT * FROM settings WHERE setname = @setname";
             comm.Parameters.AddWithValue("setname", setting);
-            using var reader = await comm.ExecuteReaderAsync();
+            await using var reader = await comm.ExecuteReaderAsync();
             if (!await reader.ReadAsync())
                 return null;
             return reader["setvalue"].ToString();
@@ -177,19 +177,22 @@ namespace FtpSync
         /// n > 0 se è già stato sincronizzato n volte con errori.
         /// -1 se è già stato sincronizzato con successo.
         /// </summary>
+        /// <param name="syncId"></param>
         /// <param name="filename"></param>
+        /// <param name="fileSize"></param>
+        /// <param name="lastModDate"></param>
         /// <returns></returns>
         public async Task<FileSyncStatus> GetFileSyncStatus(int syncId, string filename, long fileSize, DateTime lastModDate)
         {
-            using var conn = GetConnection();
+            await using var conn = GetConnection();
             await conn.OpenAsync();
 
-            using var comm = conn.CreateCommand();
-            comm.CommandType = System.Data.CommandType.Text;
+            await using var comm = conn.CreateCommand();
+            comm.CommandType = CommandType.Text;
             comm.CommandText = "SELECT * FROM processedfiles WHERE syncid = @syncid AND filename = @filename";
             comm.Parameters.AddWithValue("filename", filename);
             comm.Parameters.AddWithValue("syncid", syncId);
-            using var reader = await comm.ExecuteReaderAsync();
+            await using var reader = await comm.ExecuteReaderAsync();
 
             if (!await reader.ReadAsync())
             {
@@ -216,25 +219,30 @@ namespace FtpSync
         {
             public bool FileExists { get; set; }
 
-            public bool Processed { get; set; } = false;
-            public int ProcessedFileId { get; set; } = 0;
-            public bool DifferentFileSize { get; set; } = false;
-            public bool DifferentLastModDate { get; set; } = false;
-            public int Retries { get; set; } = 0;
+            public bool Processed { get; set; }
+            public int ProcessedFileId { get; set; }
+            public bool DifferentFileSize { get; set; }
+            public bool DifferentLastModDate { get; set; }
+            public int Retries { get; set; }
         }
 
 
         /// <summary>
         /// Marca il file come sincronizzato.
         /// </summary>
+        /// <param name="syncId"></param>
         /// <param name="filename"></param>
+        /// <param name="fileSize"></param>
+        /// <param name="lastModDate"></param>
+        /// <param name="success" />
+        /// <param name="errors"></param>
         /// <returns></returns>
         public async Task MarkFileAsSynhronized(int syncId, string filename, long fileSize, DateTime lastModDate, bool success, string? errors)
         {
             var stat = await GetFileSyncStatus(syncId, filename, fileSize, lastModDate);
-            using var conn = GetConnection();
+            await using var conn = GetConnection();
             await conn.OpenAsync();
-            using var comm = conn.CreateCommand();
+            await using var comm = conn.CreateCommand();
             comm.CommandType = CommandType.Text;
             if (!stat.FileExists)
             {

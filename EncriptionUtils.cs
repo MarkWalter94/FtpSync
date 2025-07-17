@@ -1,11 +1,10 @@
 ﻿using System.Security.Cryptography;
-using System.Text;
 
 namespace FtpSync
 {
     public interface IEncriptionUtils
     {
-        string Encrypt(string plainText);
+        string Encrypt(string? plainText);
         string Decrypt(string encrypted);
     }
     
@@ -13,9 +12,6 @@ namespace FtpSync
     {
         private static byte[] GetLocalKey()
         {
-            string userId = Environment.UserName;
-            string host = Environment.MachineName;
-            
             var sp1 = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
                 ".local", string.Concat("f70b","2a","c4","4f","f2","9"), string.Concat("18","c985","96d","e7","d9","2ac")
@@ -51,7 +47,7 @@ namespace FtpSync
             return kdf.GetBytes(32); // AES-256 key
         }
 
-        public string Encrypt(string plainText)
+        public string Encrypt(string? plainText)
         {
             byte[] key = GetLocalKey();
             using var aes = Aes.Create();

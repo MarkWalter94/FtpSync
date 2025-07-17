@@ -2,6 +2,7 @@ using System.CommandLine;
 using System.Security.Cryptography;
 using System.Text;
 using FtpSync;
+using NLog.Extensions.Logging;
 
 var argsPassed = true;
 FtpSettings? ftpSettings = null;
@@ -55,8 +56,13 @@ if (args.Any())
 while (!argsPassed)
     await Task.Delay(100);
 
-IHost host = Host.CreateDefaultBuilder(args).UseWindowsService()
-    .ConfigureLogging(logging => logging.SetMinimumLevel(LogLevel.Trace).AddConsole())
+IHost host = Host.CreateDefaultBuilder(args)
+    .UseWindowsService()
+    .ConfigureLogging(logging =>
+    {
+        logging.ClearProviders();
+        logging.AddNLog();
+    })
     .ConfigureServices(services =>
     {
         services.AddHostedService<Worker>();
@@ -66,7 +72,6 @@ IHost host = Host.CreateDefaultBuilder(args).UseWindowsService()
         {
             services.AddSingleton(ftpSettings);
         }
-
         services.AddWindowsService();
     })
     .Build();
